@@ -104,7 +104,7 @@
     }
 
     onReady(function () {
-        if (!API_BASE || API_BASE.indexOf('__API_BASE__') >= 0) {
+        if (!API_BASE || API_BASE.indexOf('__API_' + 'BASE__') >= 0) {
             showError('入口文件未配置接口地址');
             return;
         }
